@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pot of Fortune - Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 min-h-screen p-6">
+  <div class="max-w-4xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold mb-4">🛠️ Pot of Fortune - Admin Panel</h1>
+
+    <h2 class="text-xl font-semibold mb-2">Create New User</h2>
+    <div class="flex items-center gap-2 mb-4">
+      <input type="password" id="newPassword" placeholder="Set password" class="border p-2 rounded flex-1">
+      <button onclick="createPlayer()" class="bg-blue-600 text-white px-4 py-2 rounded">Create</button>
+    </div>
+    <div id="newUserMsg" class="text-sm text-green-600 mb-4 hidden"></div>
+
+    <h2 class="text-xl font-semibold mb-2">Manage Users</h2>
+    <input type="text" id="searchPlayer" placeholder="Search by username (6-digit ID)" oninput="renderPlayerList()" class="border p-2 rounded w-full mb-2">
+    <div id="playerList" class="space-y-3"></div>
+
+    <h2 class="text-xl font-semibold mt-6 mb-2">Select Winning Pot by Pool</h2>
+    <div id="poolWinnerSection" class="space-y-4"></div>
+  </div>
+
+  <script>
+    const supabase = supabase.createClient(
+      'https://ekbzhkkpjsoounsndlyd.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVrYnpoa2twanNvb3Vuc25kbHlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0NDI0ODYsImV4cCI6MjA2NDAxODQ4Nn0.uWWDT7v3Dp9gJis7CsFBVJP0mz3XfNVkSb7yFwID6Mc'
+    );
+
+    async function createPlayer() {
+      const password = document.getElementById("newPassword").value.trim();
+      if (!password) return alert("Password is required");
+
+      let username;
+      let exists = true;
+      while (exists) {
+        username = Math.floor(100000 + Math.random() * 900000).toString();
+        const { data } = await supabase.from("players").select("username").eq("username", username).maybeSingle();
+        exists = !!data;
+      }
+
+      await supabase.from("players").insert({ username, password, wallet: 5 });
+      document.getElementById("newUserMsg").innerText = `New user created: ${username} (copied to clipboard)`;
+      document.getElementById("newUserMsg").classList.remove("hidden");
+      navigator.clipboard.writeText(username);
+      document.getElementById("newPassword").value = "";
+      renderPlayerList();
+    }
+
+    async function renderPlayerList() {
+      const term = document.getElementById("searchPlayer").value.trim();
+      let { data: players } = await supabase.from("players").select("*").order("username", { ascending: true });
+      players = players.filter(p => p.username.includes(term));
+
+      const container = document.getElementById("playerList");
+      container.innerHTML = "";
+      players.forEach(p => {
+        const div = document.createElement("div");
+        div.className = "border rounded p-2 bg-gray-50";
+        div.innerHTML = `
+          <div class="flex justify-between items-center">
+            <div>
+              <strong>ID:</strong> ${p.username}<br/>
+              <strong>Wallet:</strong> $${p.wallet.toFixed(2)}
+            </div>
+            <div class="space-x-1">
+              <button onclick="adjustWallet('${p.username}', 'recharge')" class="bg-green-600 text-white px-2 py-1 rounded">Recharge</button>
+              <button onclick="adjustWallet('${p.username}', 'redeem')" class="bg-red-600 text-white px-2 py-1 rounded">Redeem</button>
+              <button onclick="resetPassword('${p.username}')" class="bg-yellow-500 text-white px-2 py-1 rounded">Reset Pass</button>
+              <button onclick="deletePlayer('${p.username}')" class="bg-gray-700 text-white px-2 py-1 rounded">❌</button>
+            </div>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    async function adjustWallet(username, type) {
+      const amount = parseFloat(prompt(`Enter amount to ${type}:`));
+      if (isNaN(amount) || amount <= 0) return alert("Invalid amount");
+
+      const { data: player } = await supabase.from("players").select("*").eq("username", username).maybeSingle();
+      if (!player) return;
+
+      const newWallet = type === "recharge" ? player.wallet + amount : player.wallet - amount;
+      if (newWallet < 0) return alert("Insufficient balance");
+
+      await supabase.from("players").update({ wallet: newWallet }).eq("username", username);
+      renderPlayerList();
+    }
+
+    async function deletePlayer(username) {
+      if (!confirm("Are you sure?")) return;
+      await supabase.from("players").delete().eq("username", username);
+      await supabase.from("pools").delete().eq("username", username);
+      renderPlayerList();
+      renderPoolWinners();
+    }
+
+    async function resetPassword(username) {
+      const newPass = prompt("Enter new password:");
+      if (!newPass) return;
+      await supabase.from("players").update({ password: newPass }).eq("username", username);
+      alert("Password updated.");
+    }
+
+    async function renderPoolWinners() {
+      const { data: entries } = await supabase.from("pools").select("*");
+
+      const grouped = {};
+      entries.forEach(e => {
+        if (!grouped[e.amount]) grouped[e.amount] = [];
+        grouped[e.amount].push(e);
+      });
+
+      const section = document.getElementById("poolWinnerSection");
+      section.innerHTML = "";
+
+      Object.entries(grouped).forEach(([amount, entries]) => {
+        const poolDiv = document.createElement("div");
+        poolDiv.className = "border p-4 rounded bg-blue-50";
+        poolDiv.innerHTML = `
+          <h3 class="text-lg font-semibold mb-2">Pool: $${amount} (${entries.length} entries)</h3>
+          <div class="flex items-center gap-2 mb-2">
+            <select id="winningPot-${amount}" class="border p-1 rounded">
+              <option value="Pot 1">Pot 1</option>
+              <option value="Pot 2">Pot 2</option>
+              <option value="Pot 3">Pot 3</option>
+            </select>
+            <button onclick="setWinningPot('${amount}')" class="bg-green-600 text-white px-2 py-1 rounded">Set Winner</button>
+            <button onclick="randomWinningPot('${amount}')" class="bg-yellow-500 text-white px-2 py-1 rounded">Random Pot</button>
+          </div>
+          <div id="winnerMsg-${amount}" class="text-sm text-green-800"></div>
+        `;
+        section.appendChild(poolDiv);
+      });
+    }
+
+    async function setWinningPot(amount) {
+      const selectedPot = document.getElementById(`winningPot-${amount}`).value;
+      distributeWinners(amount, selectedPot);
+    }
+
+    async function randomWinningPot(amount) {
+      const pots = ["Pot 1", "Pot 2", "Pot 3"];
+      const selectedPot = pots[Math.floor(Math.random() * pots.length)];
+      distributeWinners(amount, selectedPot);
+    }
+
+    async function distributeWinners(amount, pot) {
+      const { data: entries } = await supabase.from("pools").select("*").eq("amount", amount);
+      const winners = entries.filter(e => e.pot === pot);
+
+      const prizePool = entries.length * parseFloat(amount);
+      const prize = (prizePool * 0.9) / (winners.length || 1);
+
+      for (let winner of winners) {
+        const { data: player } = await supabase.from("players").select("*").eq("username", winner.username).maybeSingle();
+        if (player) {
+          await supabase.from("players").update({ wallet: player.wallet + prize }).eq("username", player.username);
+        }
+      }
+
+      await supabase.from("pools").delete().eq("amount", amount);
+      document.getElementById(`winnerMsg-${amount}`).innerText =
+        winners.length
+          ? `Winning Pot: ${pot} | ${winners.length} winner(s) | Prize: $${prize.toFixed(2)} each`
+          : `No winners. Winning pot was ${pot}.`;
+
+      renderPlayerList();
+      renderPoolWinners();
+    }
+
+    renderPlayerList();
+    renderPoolWinners();
+  </script>
+</body>
+</html>
